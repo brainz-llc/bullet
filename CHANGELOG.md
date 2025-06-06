@@ -1,5 +1,30 @@
 ## Next Release
 
+## 8.0.8 (05/30/2025)
+
+* Add middleware after initializers
+* Fix bullet composite primary key retrieval
+
+## 8.0.7 (05/15/2025)
+
+* Try to insert `Bullet::Rack` properly
+
+## 8.0.6 (05/07/2025)
+
+* Add CSP nonce for footer styles as well
+* Add support for OpenTelemetry reporting
+
+## 8.0.5 (04/21/2025)
+
+* Properly insert ContentSecurityPolicy middleware
+* Properly parse query string
+
+## 8.0.4 (04/18/2025)
+
+* Insert bullet middleware before `ContentSecurityPolicy`
+* Support url query `skip_html_injection=true`
+* Mark object as impossible after updating inversed
+
 ## 8.0.3 (04/04/2025)
 
 * Update non persisted `inversed_objects`

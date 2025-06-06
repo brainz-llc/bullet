@@ -1,10 +1,14 @@
 # frozen_string_literal: true
 
+require 'rack/request'
+require 'json'
+require 'cgi'
+
 module Bullet
   class Rack
     include Dependency
 
-    NONCE_MATCHER = /script-src .*'nonce-(?<nonce>[A-Za-z0-9+\/]+={0,2})'/
+    NONCE_MATCHER = /(script|style)-src .*'nonce-(?<nonce>[A-Za-z0-9+\/]+={0,2})'/
 
     def initialize(app)
       @app = app
@@ -19,12 +23,13 @@ module Bullet
       response_body = nil
 
       if Bullet.notification? || Bullet.always_append_html_body
-        if Bullet.inject_into_page? && !file?(headers) && !sse?(headers) && !empty?(response) && status == 200
+        request = ::Rack::Request.new(env)
+        if Bullet.inject_into_page? && !skip_html_injection?(request) && !file?(headers) && !sse?(headers) && !empty?(response) && status == 200
           if html_request?(headers, response)
             response_body = response_body(response)
 
             with_security_policy_nonce(headers) do |nonce|
-              response_body = append_to_html_body(response_body, footer_note) if Bullet.add_footer
+              response_body = append_to_html_body(response_body, footer_note(nonce)) if Bullet.add_footer
               response_body = append_to_html_body(response_body, Bullet.gather_inline_notifications)
               if Bullet.add_footer && !Bullet.skip_http_headers
                 response_body = append_to_html_body(response_body, xhr_script(nonce))
@@ -65,16 +70,48 @@ module Bullet
       end
     end
 
-    def footer_note
-      "<details #{details_attributes}><summary #{summary_attributes}>Bullet Warnings</summary><div #{footer_content_attributes}>#{Bullet.footer_info.uniq.join('<br>')}#{footer_console_message}</div></details>"
+    def footer_note(nonce = nil)
+      %(<details id="bullet-footer" data-is-bullet-footer><summary>Bullet Warnings</summary><div>#{Bullet.footer_info.uniq.join('<br>')}#{footer_console_message(nonce)}</div>#{footer_style(nonce)}</details>)
+    end
+
+    # Make footer styles work with ContentSecurityPolicy style-src as self
+    def footer_style(nonce = nil)
+      css = <<~CSS
+        details#bullet-footer {cursor: pointer; position: fixed; left: 0px; bottom: 0px; z-index: 9999; background: #fdf2f2; color: #9b1c1c; font-size: 12px; border-radius: 0px 8px 0px 0px; border: 1px solid #9b1c1c;}
+        details#bullet-footer summary {font-weight: 600; padding: 2px 8px;}
+        details#bullet-footer div {padding: 8px; border-top: 1px solid #9b1c1c;}
+      CSS
+      if nonce
+        %(<style type="text/css" nonce="#{nonce}">#{css}</style>)
+      else
+        %(<style type="text/css">#{css}</style>)
+      end
     end
 
     def set_header(headers, header_name, header_array)
       # Many proxy applications such as Nginx and AWS ELB limit
       # the size a header to 8KB, so truncate the list of reports to
       # be under that limit
-      header_array.pop while header_array.to_json.length > 8 * 1024
-      headers[header_name] = header_array.to_json
+      header_array.pop while JSON.generate(header_array).length > 8 * 1024
+      headers[header_name] = JSON.generate(header_array)
+    end
+
+    def skip_html_injection?(request)
+      query_string = request.env['QUERY_STRING']
+      return false if query_string.nil? || query_string.empty?
+
+      params = simple_parse_query_string(query_string)
+      params['skip_html_injection'] == 'true'
+    end
+
+    # Simple query string parser
+    def simple_parse_query_string(query_string)
+      params = {}
+      query_string.split('&').each do |pair|
+        key, value = pair.split('=', 2).map { |s| CGI.unescape(s) }
+        params[key] = value if key && !key.empty?
+      end
+      params
     end
 
     def file?(headers)
@@ -99,28 +136,18 @@ module Bullet
 
     private
 
-    def details_attributes
-      <<~EOF
-        id="bullet-footer" data-is-bullet-footer
-        style="cursor: pointer; position: fixed; left: 0px; bottom: 0px; z-index: 9999; background: #fdf2f2; color: #9b1c1c; font-size: 12px; border-radius: 0px 8px 0px 0px; border: 1px solid #9b1c1c;"
-      EOF
-    end
-
-    def summary_attributes
-      <<~EOF
-        style="font-weight: 600; padding: 2px 8px"
-      EOF
-    end
-
-    def footer_content_attributes
-      <<~EOF
-        style="padding: 8px; border-top: 1px solid #9b1c1c;"
-      EOF
-    end
-
-    def footer_console_message
+    def footer_console_message(nonce = nil)
       if Bullet.console_enabled?
-        "<br/><span style='font-style: italic;'>See 'Uniform Notifier' in JS Console for Stacktrace</span>"
+        footer = %(<br/><span id="console-message">See 'Uniform Notifier' in JS Console for Stacktrace</span>)
+        css = "details#bullet-footer #console-message {font-style: italic;}"
+        style =
+          if nonce
+            %(<style type="text/css" nonce="#{nonce}">#{css}</style>)
+          else
+            %(<style type="text/css">#{css}</style>)
+          end
+
+        footer + style
       end
     end
 

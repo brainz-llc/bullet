@@ -33,6 +33,40 @@ module Bullet
       end
     end
 
+    context '#skip_html_injection?' do
+      let(:request) { double('request') }
+
+      it 'should return false if query_string is nil' do
+        allow(request).to receive(:env).and_return({ 'QUERY_STRING' => nil })
+        expect(middleware.skip_html_injection?(request)).to be_falsey
+      end
+
+      it 'should return false if query_string is empty' do
+        allow(request).to receive(:env).and_return({ 'QUERY_STRING' => '' })
+        expect(middleware.skip_html_injection?(request)).to be_falsey
+      end
+
+      it 'should return true if skip_html_injection parameter is true' do
+        allow(request).to receive(:env).and_return({ 'QUERY_STRING' => 'skip_html_injection=true' })
+        expect(middleware.skip_html_injection?(request)).to be_truthy
+      end
+
+      it 'should return false if skip_html_injection parameter is not true' do
+        allow(request).to receive(:env).and_return({ 'QUERY_STRING' => 'skip_html_injection=false' })
+        expect(middleware.skip_html_injection?(request)).to be_falsey
+      end
+
+      it 'should return false if skip_html_injection parameter is not present' do
+        allow(request).to receive(:env).and_return({ 'QUERY_STRING' => 'other_param=value' })
+        expect(middleware.skip_html_injection?(request)).to be_falsey
+      end
+
+      it 'should handle complex query strings' do
+        allow(request).to receive(:env).and_return({ 'QUERY_STRING' => 'param1=value1&skip_html_injection=true&param2=value2' })
+        expect(middleware.skip_html_injection?(request)).to be_truthy
+      end
+    end
+
     context 'empty?' do
       it 'should be false if response is a string and not empty' do
         response = double(body: '<html><head></head><body></body></html>')
@@ -151,7 +185,7 @@ module Bullet
 
             _, headers, response = middleware.call('Content-Type' => 'text/html')
 
-            size = 56 + middleware.send(:footer_note).length + middleware.send(:xhr_script, nonce).length
+            size = 56 + middleware.send(:footer_note, nonce).length + middleware.send(:xhr_script, nonce).length
             expect(headers['Content-Length']).to eq(size.to_s)
           end
 
@@ -169,7 +203,42 @@ module Bullet
 
             _, headers, response = middleware.call('Content-Type' => 'text/html')
 
-            size = 56 + middleware.send(:footer_note).length + middleware.send(:xhr_script, nonce).length
+            size = 56 + middleware.send(:footer_note, nonce).length + middleware.send(:xhr_script, nonce).length
+            expect(headers['Content-Length']).to eq(size.to_s)
+          end
+
+          it 'should include CSP nonce in inline style if console_enabled and a CSP is applied' do
+            allow(Bullet).to receive(:add_footer).at_least(:once).and_return(true)
+            expect(Bullet).to receive(:console_enabled?).and_return(true)
+            allow(middleware).to receive(:xhr_script).and_call_original
+
+            nonce = '+t9/wTlgG6xbHxXYUaDNzQ=='
+            app.headers = {
+              'Content-Type' => 'text/html',
+              'Content-Security-Policy' => "default-src 'self' https:; style-src 'self' https: 'nonce-#{nonce}'"
+            }
+
+            _, headers, response = middleware.call('Content-Type' => 'text/html')
+
+            size = 56 + middleware.send(:footer_note, nonce).length + middleware.send(:xhr_script, nonce).length
+            expect(headers['Content-Length']).to eq(size.to_s)
+          end
+
+          it 'should include CSP nonce in inline style if console_enabled and a CSP (report only) is applied' do
+            allow(Bullet).to receive(:add_footer).at_least(:once).and_return(true)
+            expect(Bullet).to receive(:console_enabled?).and_return(true)
+            allow(middleware).to receive(:xhr_script).and_call_original
+
+            nonce = '+t9/wTlgG6xbHxXYUaDNzQ=='
+            app.headers = {
+              'Content-Type' => 'text/html',
+              'Content-Security-Policy-Report-Only' =>
+                "default-src 'self' https:; style-src 'self' https: 'nonce-#{nonce}'"
+            }
+
+            _, headers, response = middleware.call('Content-Type' => 'text/html')
+
+            size = 56 + middleware.send(:footer_note, nonce).length + middleware.send(:xhr_script, nonce).length
             expect(headers['Content-Length']).to eq(size.to_s)
           end
 
